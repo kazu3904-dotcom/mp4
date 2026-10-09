@@ -70,6 +70,7 @@ a.dl{display:inline-block;background:#2ecc71;color:#000;font-weight:600;padding:
     <div class="card">
       <div class="row">
         <button class="primary" id="go">MP4として保存</button>
+        <button id="cancel" style="display:none;border-color:#ff7a7a;color:#ff7a7a">キャンセル</button>
         <button id="other">別のファイルを開く</button>
       </div>
       <progress id="bar" value="0" max="1" style="display:none;margin-top:14px"></progress>
@@ -83,7 +84,7 @@ a.dl{display:inline-block;background:#2ecc71;color:#000;font-weight:600;padding:
 <script>
 const $ = id => document.getElementById(id);
 const v = $('v'), drop = $('drop'), fileIn = $('file');
-let file = null, dur = 0, S = 0, E = 0, ffmpeg = null, ffReady = null, objUrl = null;
+let cancelled = false, curConv = null, file = null, dur = 0, S = 0, E = 0, ffmpeg = null, ffReady = null, objUrl = null;
 
 const fmt = t => { const m = Math.floor(t/60), s = (t - m*60).toFixed(1); return m + ':' + (s < 10 ? '0' : '') + s; };
 const say = (t, err) => { $('msg').textContent = t; $('msg').className = 'msg' + (err ? ' err' : ''); };
@@ -204,7 +205,10 @@ async function cutFast() {
   const conv = await mb.Conversion.init({ input, output, trim: dur ? { start: S, end: E } : undefined });
   if (!conv.isValid) throw new Error('この形式は高速処理に対応していません');
   conv.onProgress = p => { $('bar').value = p; };
+  curConv = conv;
   await conv.execute();
+  curConv = null;
+  if (cancelled) throw new Error('cancelled');
   return new Blob([output.target.buffer], { type: 'video/mp4' });
 }
 
@@ -216,7 +220,9 @@ async function cutSlow() {
   say('予備の方法で処理中…（時間がかかります）');
   await ff.writeFile(inp, new Uint8Array(await file.arrayBuffer()));
   const args = ['-ss', S.toFixed(3), '-to', E.toFixed(3), '-i', inp, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', out];
-  if (await ff.exec(args) !== 0) throw new Error('ffmpeg に失敗しました');
+  const code = await ff.exec(args);
+  if (cancelled) throw new Error('cancelled');
+  if (code !== 0) throw new Error('ffmpeg に失敗しました');
   const data = await ff.readFile(out);
   try { await ff.deleteFile(inp); await ff.deleteFile(out); } catch {}
   return new Blob([data.buffer], { type: 'video/mp4' });
@@ -226,19 +232,27 @@ $('go').onclick = async () => {
   if (!file) return;
   if (!dur) { S = 0; E = 1e6; }
   const btn = $('go'); btn.disabled = true; $('result').innerHTML = '';
+  cancelled = false; $('cancel').style.display = '';
   $('bar').value = 0; $('bar').style.display = 'block';
   try {
     let blob;
     try { blob = await cutFast(); }
-    catch (e) { console.warn('fast failed', e); $('bar').value = 0; blob = await cutSlow(); }
+    catch (e) { if (cancelled) throw e; console.warn('fast failed', e); $('bar').value = 0; blob = await cutSlow(); }
     finish(blob);
   } catch (e) {
+    if (cancelled) { say('キャンセルしました。'); $('bar').style.display = 'none'; ffReady = null; return; }
     console.error(e);
     say('失敗しました：' + (e.message || e) + '（巨大なファイルはメモリ不足になることがあります）', true);
     ffReady = null;
-  } finally { btn.disabled = false; }
+  } finally { btn.disabled = false; $('cancel').style.display = 'none'; curConv = null; }
+};
+$('cancel').onclick = () => {
+  cancelled = true; say('キャンセル中…');
+  try { curConv && curConv.cancel(); } catch {}
+  try { ffmpeg && ffmpeg.terminate(); } catch {}   // 予備方式の処理を強制終了
 };
 </script>
 </body>
 </html>
+
 
