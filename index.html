@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -65,13 +65,6 @@ a.dl{display:inline-block;background:#2ecc71;color:#000;font-weight:600;padding:
           <button id="prev">選択範囲を再生</button>
         </div>
       </div>
-    </div>
-
-    <div class="card">
-      <label class="opt"><input type="radio" name="mode" value="copy" checked>
-        <span>高速モード（再エンコードなし）<small>数秒で完了・画質劣化なし。開始位置が直前のキーフレームに少しずれる場合があります。</small></span></label>
-      <label class="opt"><input type="radio" name="mode" value="re">
-        <span>正確モード（再エンコード）<small>1フレーム単位で正確。時間はかかります（ブラウザ内処理のため動画の長さの数倍）。</small></span></label>
     </div>
 
     <div class="card">
@@ -193,43 +186,59 @@ async function run(ff, args) {
   if (code !== 0) throw new Error('ffmpeg exit ' + code);
 }
 
+const MB_URL = 'https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.min.mjs';
+function finish(blob) {
+  const url = URL.createObjectURL(blob);
+  const name = file.name.replace(/\.[^.]+$/, '') + '_cut.mp4';
+  $('result').innerHTML = `<a class="dl" href="${url}" download="${name.replace(/"/g,'')}">⬇ ${name} をダウンロード（${(blob.size/1048576).toFixed(1)} MB）</a>`;
+  $('result').firstChild.click();
+  $('bar').value = 1; say('完了しました。');
+}
+
+// 高速: ブラウザ標準の機能（WebCodecs）で切り出し。コピーできる所はそのまま、必要な所だけ変換する
+async function cutFast() {
+  say('切り出し中…');
+  const mb = await import(MB_URL);
+  const input = new mb.Input({ source: new mb.BlobSource(file), formats: mb.ALL_FORMATS });
+  const output = new mb.Output({ format: new mb.Mp4OutputFormat({ fastStart: 'in-memory' }), target: new mb.BufferTarget() });
+  const conv = await mb.Conversion.init({ input, output, trim: dur ? { start: S, end: E } : undefined });
+  if (!conv.isValid) throw new Error('この形式は高速処理に対応していません');
+  conv.onProgress = p => { $('bar').value = p; };
+  await conv.execute();
+  return new Blob([output.target.buffer], { type: 'video/mp4' });
+}
+
+// 予備: ffmpeg.wasm（遅いが対応形式が広い）
+async function cutSlow() {
+  const ff = await getFFmpeg();
+  const ext = (file.name.match(/\.([^.]+)$/) || [, 'mp4'])[1].toLowerCase();
+  const inp = 'input.' + ext, out = 'output.mp4';
+  say('予備の方法で処理中…（時間がかかります）');
+  await ff.writeFile(inp, new Uint8Array(await file.arrayBuffer()));
+  const args = ['-ss', S.toFixed(3), '-to', E.toFixed(3), '-i', inp, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', out];
+  if (await ff.exec(args) !== 0) throw new Error('ffmpeg に失敗しました');
+  const data = await ff.readFile(out);
+  try { await ff.deleteFile(inp); await ff.deleteFile(out); } catch {}
+  return new Blob([data.buffer], { type: 'video/mp4' });
+}
+
 $('go').onclick = async () => {
   if (!file) return;
   if (!dur) { S = 0; E = 1e6; }
   const btn = $('go'); btn.disabled = true; $('result').innerHTML = '';
   $('bar').value = 0; $('bar').style.display = 'block';
-  const ext = (file.name.match(/\.([^.]+)$/) || [, 'mp4'])[1].toLowerCase();
-  const inp = 'input.' + ext, out = 'output.mp4';
-  let mode = document.querySelector('input[name=mode]:checked').value;
   try {
-    const ff = await getFFmpeg();
-    say('ファイルを読み込み中…');
-    await ff.writeFile(inp, new Uint8Array(await file.arrayBuffer()));
-    say(mode === 'copy' ? 'カット中…' : '再エンコード中…（しばらくお待ちください）');
-    try {
-      await run(ff, mode === 'copy' ? copyArgs(inp, out) : reArgs(inp, out));
-    } catch (e) {
-      if (mode !== 'copy') throw e;
-      say('この形式は高速モードに非対応のため、再エンコードで保存します…');
-      try { await ff.deleteFile(out); } catch {}
-      $('bar').value = 0;
-      await run(ff, reArgs(inp, out));
-    }
-    const data = await ff.readFile(out);
-    const blob = new Blob([data.buffer], { type: 'video/mp4' });
-    const url = URL.createObjectURL(blob);
-    const name = file.name.replace(/\.[^.]+$/, '') + '_cut.mp4';
-    $('result').innerHTML = `<a class="dl" href="${url}" download="${name.replace(/"/g,'')}">⬇ ${name} をダウンロード（${(blob.size/1048576).toFixed(1)} MB）</a>`;
-    $('result').firstChild.click();
-    say('完了しました。');
-    $('bar').value = 1;
-    try { await ff.deleteFile(inp); await ff.deleteFile(out); } catch {}
+    let blob;
+    try { blob = await cutFast(); }
+    catch (e) { console.warn('fast failed', e); $('bar').value = 0; blob = await cutSlow(); }
+    finish(blob);
   } catch (e) {
     console.error(e);
     say('失敗しました：' + (e.message || e) + '（巨大なファイルはメモリ不足になることがあります）', true);
-    ffReady = null; // 次回エンジンを作り直す
+    ffReady = null;
   } finally { btn.disabled = false; }
 };
 </script>
 </body>
 </html>
+
