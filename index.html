@@ -192,6 +192,7 @@ function finish(blob) {
   const url = URL.createObjectURL(blob);
   const name = file.name.replace(/\.[^.]+$/, '') + '_cut.mp4';
   $('result').innerHTML = `<a class="dl" href="${url}" download="${name.replace(/"/g,'')}">⬇ ${name} をダウンロード（${(blob.size/1048576).toFixed(1)} MB）</a>`;
+  $('result').insertAdjacentHTML('beforeend', '<div style="margin-top:14px;color:var(--sub);font-size:13px">できあがりの確認（ここで再生できます）</div><video controls playsinline src="' + url + '" style="margin-top:6px"></video>');
   $('result').firstChild.click();
   $('bar').value = 1; say('完了しました。');
 }
@@ -254,5 +255,6 @@ $('cancel').onclick = () => {
 </script>
 </body>
 </html>
+
 
 
