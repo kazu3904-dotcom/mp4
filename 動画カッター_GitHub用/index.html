@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>かんたん動画カッター</title>
+<style>
+:root{--bg:#101114;--panel:#16171a;--line:#252629;--text:#fff;--sub:#95979c;--accent:#ffd433;--accent-h:#ffe46b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:"Rubik","Yu Gothic UI","Meiryo",sans-serif;min-height:100vh}
+header{padding:14px 24px;border-bottom:1px solid #000;font-weight:600;font-size:18px}
+main{max-width:960px;margin:0 auto;padding:24px 16px 60px}
+.drop{border:1px dashed #4c4e51;border-radius:12px;background:var(--panel);padding:56px 16px;text-align:center;cursor:pointer;transition:.15s}
+.drop.over,.drop:hover{border-color:var(--accent);background:#1b1c1f}
+.drop .big{color:var(--accent);font-size:22px;font-weight:600;margin-bottom:8px}
+.drop .small{color:var(--sub);font-size:14px}
+#editor{display:none}
+video{width:100%;max-height:52vh;background:#000;border-radius:10px;display:block}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-top:16px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+button{font:inherit;cursor:pointer;border:1px solid #4c4e51;background:#222326;color:var(--text);border-radius:8px;padding:9px 14px}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:#000;border-color:var(--accent);font-weight:600;padding:12px 28px;font-size:16px}
+button.primary:hover{background:var(--accent-h)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.time{font-variant-numeric:tabular-nums;color:var(--sub)}
+.time b{color:var(--text);font-weight:500}
+/* 範囲スライダー */
+.range{position:relative;height:44px;margin:10px 4px 6px;user-select:none;touch-action:none}
+.track{position:absolute;left:0;right:0;top:19px;height:6px;background:#2b2c30;border-radius:3px}
+.sel{position:absolute;top:19px;height:6px;background:var(--accent);border-radius:3px}
+.handle{position:absolute;top:8px;width:14px;height:28px;margin-left:-7px;background:#fff;border-radius:4px;cursor:ew-resize;border:2px solid var(--accent)}
+.head{position:absolute;top:4px;width:2px;height:36px;margin-left:-1px;background:#ff5b29;pointer-events:none}
+label.opt{display:flex;gap:8px;align-items:flex-start;padding:8px 0;cursor:pointer}
+label.opt small{display:block;color:var(--sub)}
+progress{width:100%;height:10px;accent-color:var(--accent)}
+.msg{color:var(--sub);font-size:13px;margin-top:8px;min-height:18px}
+.err{color:#ff7a7a}
+a.dl{display:inline-block;background:#2ecc71;color:#000;font-weight:600;padding:12px 24px;border-radius:8px;text-decoration:none}
+</style>
+</head>
+<body>
+<header>🎬 かんたん動画カッター <span style="color:var(--sub);font-weight:400;font-size:13px">MOV / MP4 / WebM など → MP4 で保存（動画はPC外に送信されません）</span></header>
+<main>
+  <div id="drop" class="drop">
+    <div class="big">ファイルを追加</div>
+    <div class="small">またはここに動画をドラッグ＆ドロップ（MOV・MP4・WebM・MKV・3GP など）</div>
+    <input id="file" type="file" accept="video/*,.mov,.mp4,.m4v,.webm,.mkv,.3gp,.avi" hidden>
+  </div>
+
+  <div id="editor">
+    <video id="v" controls playsinline></video>
+
+    <div class="card">
+      <div class="range" id="range">
+        <div class="track"></div><div class="sel" id="sel"></div>
+        <div class="head" id="head"></div>
+        <div class="handle" id="hs"></div><div class="handle" id="he"></div>
+      </div>
+      <div class="row" style="justify-content:space-between">
+        <div class="time">開始 <b id="tS">0:00.0</b> ／ 終了 <b id="tE">0:00.0</b> ／ 長さ <b id="tL">0:00.0</b></div>
+        <div class="row">
+          <button id="setS">▶ 現在位置を開始に</button>
+          <button id="setE">現在位置を終了に ◀</button>
+          <button id="prev">選択範囲を再生</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <label class="opt"><input type="radio" name="mode" value="copy" checked>
+        <span>高速モード（再エンコードなし）<small>数秒で完了・画質劣化なし。開始位置が直前のキーフレームに少しずれる場合があります。</small></span></label>
+      <label class="opt"><input type="radio" name="mode" value="re">
+        <span>正確モード（再エンコード）<small>1フレーム単位で正確。時間はかかります（ブラウザ内処理のため動画の長さの数倍）。</small></span></label>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <button class="primary" id="go">MP4として保存</button>
+        <button id="other">別のファイルを開く</button>
+      </div>
+      <progress id="bar" value="0" max="1" style="display:none;margin-top:14px"></progress>
+      <div class="msg" id="msg"></div>
+      <div id="result" style="margin-top:8px"></div>
+    </div>
+  </div>
+</main>
+
+<script src="vendor/ffmpeg.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const v = $('v'), drop = $('drop'), fileIn = $('file');
+let file = null, dur = 0, S = 0, E = 0, ffmpeg = null, ffReady = null, objUrl = null;
+
+const fmt = t => { const m = Math.floor(t/60), s = (t - m*60).toFixed(1); return m + ':' + (s < 10 ? '0' : '') + s; };
+const say = (t, err) => { $('msg').textContent = t; $('msg').className = 'msg' + (err ? ' err' : ''); };
+
+/* ---------- ファイル読み込み ---------- */
+drop.onclick = () => fileIn.click();
+fileIn.onchange = () => fileIn.files[0] && load(fileIn.files[0]);
+['dragover','dragenter'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', ev => ev.dataTransfer.files[0] && load(ev.dataTransfer.files[0]));
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => { e.preventDefault(); if (e.target !== drop && e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); });
+$('other').onclick = () => fileIn.click();
+
+function load(f) {
+  file = f;
+  if (objUrl) URL.revokeObjectURL(objUrl);
+  objUrl = URL.createObjectURL(f);
+  v.src = objUrl;
+  $('result').innerHTML = ''; $('bar').style.display = 'none';
+  say('');
+  v.onloadedmetadata = () => {
+    dur = v.duration; S = 0; E = dur;
+    drop.style.display = 'none'; $('editor').style.display = 'block';
+    draw();
+  };
+  v.onerror = () => {
+    // ブラウザが再生できない形式でも、書き出しは可能
+    dur = 0; say('このファイルはプレビューできません（書き出しは試せますが、範囲指定ができません）。', true);
+    drop.style.display = 'none'; $('editor').style.display = 'block';
+  };
+}
+
+/* ---------- 範囲スライダー ---------- */
+const range = $('range');
+function draw() {
+  if (!dur) return;
+  const p = t => (t / dur * 100) + '%';
+  $('hs').style.left = p(S); $('he').style.left = p(E);
+  $('sel').style.left = p(S); $('sel').style.width = ((E - S) / dur * 100) + '%';
+  $('tS').textContent = fmt(S); $('tE').textContent = fmt(E); $('tL').textContent = fmt(E - S);
+  $('head').style.left = p(v.currentTime || 0);
+}
+function drag(handle, isStart) {
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault(); handle.setPointerCapture(e.pointerId);
+    const move = ev => {
+      const r = range.getBoundingClientRect();
+      let t = Math.min(Math.max((ev.clientX - r.left) / r.width, 0), 1) * dur;
+      if (isStart) S = Math.min(t, E - 0.1); else E = Math.max(t, S + 0.1);
+      v.currentTime = isStart ? S : E; draw();
+    };
+    const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); };
+    handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up);
+  });
+}
+drag($('hs'), true); drag($('he'), false);
+range.addEventListener('pointerdown', e => {
+  if (e.target.classList.contains('handle')) return;
+  const r = range.getBoundingClientRect(); v.currentTime = (e.clientX - r.left) / r.width * dur;
+});
+v.addEventListener('timeupdate', () => { draw(); if (playingRange && v.currentTime >= E) { v.pause(); playingRange = false; } });
+$('setS').onclick = () => { S = Math.min(v.currentTime, E - 0.1); draw(); };
+$('setE').onclick = () => { E = Math.max(v.currentTime, S + 0.1); draw(); };
+let playingRange = false;
+$('prev').onclick = () => { v.currentTime = S; playingRange = true; v.play(); };
+
+/* ---------- ffmpeg.wasm ---------- */
+async function getFFmpeg() {
+  if (ffReady) return ffReady;
+  ffReady = (async () => {
+    say('エンジンを読み込み中…（初回のみ約30MB）');
+    const ff = new FFmpegWASM.FFmpeg();
+    ff.on('progress', ({ progress }) => { if (progress >= 0 && progress <= 1) $('bar').value = progress; });
+    // 手元に ffmpeg-core.wasm があればそれを使い、無ければ（GitHub Pages など）CDN から取得する
+    let coreURL = new URL('vendor/ffmpeg-core.js', location.href).href, wasmURL = new URL('vendor/ffmpeg-core.wasm', location.href).href;
+    let local = false;
+    try { local = (await fetch(wasmURL, { method: 'HEAD' })).ok && !location.search.includes('cdn'); } catch {}
+    if (!local) {
+      const base = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/';
+      const blobURL = async (u, type) => URL.createObjectURL(new Blob([await (await fetch(u)).arrayBuffer()], { type }));
+      coreURL = await blobURL(base + 'ffmpeg-core.js', 'text/javascript');
+      wasmURL = await blobURL(base + 'ffmpeg-core.wasm', 'application/wasm');
+    }
+    await ff.load({ coreURL, wasmURL });
+    ffmpeg = ff; return ff;
+  })();
+  ffReady.catch(() => ffReady = null);
+  return ffReady;
+}
+
+const copyArgs = (inp, out) => ['-ss', S.toFixed(3), '-to', E.toFixed(3), '-i', inp, '-c', 'copy', '-avoid_negative_ts', 'make_zero', '-movflags', '+faststart', out];
+const reArgs = (inp, out) => ['-ss', S.toFixed(3), '-to', E.toFixed(3), '-i', inp,
+  '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p',
+  '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', out];
+// -ss/-to を -i の前に置くとき、-to は入力時刻基準になる（ffmpeg 5+）
+
+async function run(ff, args) {
+  const code = await ff.exec(args);
+  if (code !== 0) throw new Error('ffmpeg exit ' + code);
+}
+
+$('go').onclick = async () => {
+  if (!file) return;
+  if (!dur) { S = 0; E = 1e6; }
+  const btn = $('go'); btn.disabled = true; $('result').innerHTML = '';
+  $('bar').value = 0; $('bar').style.display = 'block';
+  const ext = (file.name.match(/\.([^.]+)$/) || [, 'mp4'])[1].toLowerCase();
+  const inp = 'input.' + ext, out = 'output.mp4';
+  let mode = document.querySelector('input[name=mode]:checked').value;
+  try {
+    const ff = await getFFmpeg();
+    say('ファイルを読み込み中…');
+    await ff.writeFile(inp, new Uint8Array(await file.arrayBuffer()));
+    say(mode === 'copy' ? 'カット中…' : '再エンコード中…（しばらくお待ちください）');
+    try {
+      await run(ff, mode === 'copy' ? copyArgs(inp, out) : reArgs(inp, out));
+    } catch (e) {
+      if (mode !== 'copy') throw e;
+      say('この形式は高速モードに非対応のため、再エンコードで保存します…');
+      try { await ff.deleteFile(out); } catch {}
+      $('bar').value = 0;
+      await run(ff, reArgs(inp, out));
+    }
+    const data = await ff.readFile(out);
+    const blob = new Blob([data.buffer], { type: 'video/mp4' });
+    const url = URL.createObjectURL(blob);
+    const name = file.name.replace(/\.[^.]+$/, '') + '_cut.mp4';
+    $('result').innerHTML = `<a class="dl" href="${url}" download="${name.replace(/"/g,'')}">⬇ ${name} をダウンロード（${(blob.size/1048576).toFixed(1)} MB）</a>`;
+    $('result').firstChild.click();
+    say('完了しました。');
+    $('bar').value = 1;
+    try { await ff.deleteFile(inp); await ff.deleteFile(out); } catch {}
+  } catch (e) {
+    console.error(e);
+    say('失敗しました：' + (e.message || e) + '（巨大なファイルはメモリ不足になることがあります）', true);
+    ffReady = null; // 次回エンジンを作り直す
+  } finally { btn.disabled = false; }
+};
+</script>
+</body>
+</html>
