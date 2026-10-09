@@ -203,7 +203,9 @@ async function cutFast() {
   const mb = await import(MB_URL);
   const input = new mb.Input({ source: new mb.BlobSource(file), formats: mb.ALL_FORMATS });
   const output = new mb.Output({ format: new mb.Mp4OutputFormat({ fastStart: 'in-memory' }), target: new mb.BufferTarget() });
-  const conv = await mb.Conversion.init({ input, output, trim: dur ? { start: S, end: E } : undefined });
+  const conv = await mb.Conversion.init({ input, output, trim: dur ? { start: S, end: E } : undefined,
+    video: { codec: 'avc', forceTranscode: true, bitrate: mb.QUALITY_HIGH },   // 必ず H.264 に再エンコード
+    audio: { codec: 'aac', forceTranscode: true, bitrate: 160000 } });
   if (!conv.isValid) throw new Error('この形式は高速処理に対応していません');
   conv.onProgress = p => { $('bar').value = p; };
   curConv = conv;
@@ -255,6 +257,7 @@ $('cancel').onclick = () => {
 </script>
 </body>
 </html>
+
 
 
 
